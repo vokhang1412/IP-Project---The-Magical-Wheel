@@ -45,10 +45,7 @@ def start_game(client_socket):
                 print(game_info)
                 guess = input("Enter your guess: ")
                 client_socket.send(guess.encode())
-                response = client_socket.recv(1024).decode()
-                print(response)
-                if "Congratulations" in response or "Game over" in response:
-                    break
+            # No need to wait for server response here, just keep sending guesses
         else:
             print("Error: Failed to start the game.")
     except Exception as e:
