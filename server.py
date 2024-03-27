@@ -76,17 +76,19 @@ def client_handler(client_socket, player_address):
                     correct_keyword = True
                     player_points[nickname] += 5
                     for client in clients:
-                        client.send(f"Congratulations to the winner with the correct keyword: \"{keyword}\"".encode())
+                        client.send(f"Congratulations to the winner '{nickname}' with the correct keyword: \"{keyword}\"".encode())
+                    break;    #end the game upon correct keyword is guessed correctly
                 else:
                     client_socket.send("Incorrect guess. Try again.".encode())
                     turn_count += 1
             else:
                 client_socket.send("You can only guess the whole word from the second turn onwards.".encode())
 
+    if not correct_keyword:
     # Inform players that the game is over
-    for client in clients:
-        client.send("Game over!".encode())
-        client.close()
+        for client in clients:
+            client.send("Game over!".encode())
+            client.close()
 
 def start_game(client_socket):
     global correct_keyword
