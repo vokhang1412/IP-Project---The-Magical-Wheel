@@ -52,7 +52,7 @@ def client_handler(client_socket, player_address):
     # Gameplay loop
     while not correct_keyword and turn_count < 5:
         guess = client_socket.recv(1024).decode()
-        if len(guess) == 1:
+        if len(guess) == 1:	
             if guess.lower() in keyword:
                 count = keyword.count(guess.lower())
                 new_keyword = ''.join([char if char == guess.lower() else '*' for char in keyword])
@@ -67,8 +67,21 @@ def client_handler(client_socket, player_address):
             else:
                 client_socket.send(f"Character '{guess}' is not in the keyword.".encode())
                 turn_count += 1
+            pass
         else:
-            client_socket.send("Invalid input. Please enter only one character.".encode())
+            # Check if it's the second turn or onwards to allow guessing the whole word
+            if turn_count >= 1:
+                # Check if the guessed word is correct
+                if guess.lower() == keyword:
+                    correct_keyword = True
+                    player_points[nickname] += 5
+                    for client in clients:
+                        client.send(f"Congratulations to the winner with the correct keyword: \"{keyword}\"".encode())
+                else:
+                    client_socket.send("Incorrect guess. Try again.".encode())
+                    turn_count += 1
+            else:
+                client_socket.send("You can only guess the whole word from the second turn onwards.".encode())
 
     # Inform players that the game is over
     for client in clients:
