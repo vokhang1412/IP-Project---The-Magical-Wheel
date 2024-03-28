@@ -58,7 +58,6 @@ def main():
     # Wait for threads to finish
     receive_thread.join()
     input_thread.join()
-    
     client_socket.close()
 
 if __name__ == "__main__":

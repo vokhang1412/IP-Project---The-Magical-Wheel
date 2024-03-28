@@ -9,10 +9,6 @@ class Player:
         self.nickname = nickname
         self.points = 0
         self.guess_count = 0
-        self.active = True  
-    def reset(self):
-        self.points = 0
-        self.guess_count = 0
         self.active = True
 
 def read_database(filename):
@@ -73,13 +69,21 @@ def start_game():
     turns = 0
     while game_running and any(p.guess_count < max_turns and p.active for p in players):
         current_player = players[turns % num_players]
-        if (current_player.active == False):
+        if not current_player.active:
             turns += 1
             continue
         # Send turn message to current player
         turn_message = "Player {}, it's your turn!\nTry to guess a character or the keyword (You can only guess the keyword from the 2nd turn): ".format(current_player.nickname)
         current_player.conn.send(turn_message.encode())
-        guess = current_player.conn.recv(1024).decode().strip()
+
+        # Set a timeout for receiving guess
+        current_player.conn.settimeout(60)  # 60 seconds timeout for guess
+        try:
+            guess = current_player.conn.recv(1024).decode().strip()
+        except socket.timeout:
+            current_player.conn.send("Timeout occurred. You missed your turn.\n".encode())
+            turns += 1
+            continue
 
         # Validate guess
         if len(guess) > 1:
@@ -103,27 +107,26 @@ def start_game():
                 current_player.conn.send("Invalid guess. Please try again.\n".encode())
         else:
             if guess.lower() in keyword.lower():
-                    occurrences = keyword.lower().count(guess.lower())
-                    current_word = update_current_word(keyword, current_word, guess)
-                    if "*" not in current_word:
-                        game_running = False
-                        current_player.points += 5
-                        end_game_message = "Congratulations to {} with the correct keyword: {}\n".format(current_player.nickname, keyword)
-                        for player in players:
-                            player.conn.send(end_game_message.encode())
-                        end_game()
-                        break
-                    else:
-                        current_player.points += 1
-                        correct_guess_message = "Character '{}' has {} occurrence(s).\nCurrent Word: {}\n".format(guess, occurrences, current_word)
-                        for player in players:
-                            player.conn.send(correct_guess_message.encode())
+                occurrences = keyword.lower().count(guess.lower())
+                current_word = update_current_word(keyword, current_word, guess)
+                if "*" not in current_word:
+                    game_running = False
+                    current_player.points += 5
+                    end_game_message = "Congratulations to {} with the correct keyword: {}\n".format(current_player.nickname, keyword)
+                    for player in players:
+                        player.conn.send(end_game_message.encode())
+                    end_game()
+                    break
+                else:
+                    current_player.points += 1
+                    correct_guess_message = "Character '{}' has {} occurrence(s).\nCurrent Word: {}\n".format(guess, occurrences, current_word)
+                    for player in players:
+                        player.conn.send(correct_guess_message.encode())
             else:
                 wrong_guess_message = "Character '{}' is not in the keyword.\n".format(guess)
                 current_player.conn.send(wrong_guess_message.encode())
             current_player.guess_count += 1
             turns += 1
-            
 
     # Game ended
     if game_running:
