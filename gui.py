@@ -8,7 +8,7 @@ import time
 # - Nickname input field (done)
 #   -> Prompt the user to enter a different nickname in case of clash (done)
 # - Points
-# - Timer countdown
+# - Timer countdown (done)
 # - Keyword
 # - Hint
 # - Guess single character
@@ -18,14 +18,14 @@ import time
 # - An option to join the next game (done)
 
 pygame.font.init()
-small_font = pygame.font.SysFont('roboto.ttf', 20)
-medium_font = pygame.font.SysFont('roboto.ttf', 35)
+font = pygame.font.SysFont('roboto.ttf', 35)
 
 class GameState(Enum):
     REGISTERING = 0
     WAITING_FOR_START = 1
     PLAYING = 2
     WAITING_FOR_SERVER_RESPONSE = 3
+    PLAYING_DISQUALIFIED = 4
  
 class Game:
     def __init__(self):
@@ -44,25 +44,31 @@ class Game:
         self._timer_duration = 5000
 
         # Nickname input
-        self._nickname_input_label = medium_font.render('Enter a nickname...', True, (0, 0, 0))
+        self._nickname_input_label = font.render('Enter a nickname:', True, (0, 0, 0))
         self._nickname_input_field = pygame_textinput.TextInputVisualizer()
 
         # Waiting announcement
-        self._waiting = medium_font.render('Waiting for game server to start...', True, (0, 0, 0))
+        self._waiting = font.render('Waiting for game server to start...', True, (0, 0, 0))
 
         # Points
         self._points = 0
-        self._points_text = medium_font.render('Points: ' + str(self._points), True, (0, 0, 0))
+        self._points_text = font.render('Points: ' + str(self._points), True, (0, 0, 0))
 
         # Timer initial configurations
         self._start_time = pygame.time.get_ticks()
         self._timer_duration = 10000
         self._remaining_time = self._timer_duration // 1000
-        self._timer_text = medium_font.render('Time remaining: ' + str(self._remaining_time), True, (255, 0, 0))
+        self._timer = font.render('Time remaining: ' + str(self._remaining_time), True, (255, 0, 0))
 
         # Answer input
-        self._answer_input_label = medium_font.render('Enter your answer: ', True, (0, 0, 0))
+        self._keyword = font.render('Keyword: ******', True, (0, 0, 255))
+        self._hint = font.render('Hint: This is a hint.', True, (0, 0, 255))
+        self._answer_input_label = font.render('Enter your answer (a character or the whole keyword): ', True, (0, 0, 0))
         self._answer_input_field = pygame_textinput.TextInputVisualizer()
+
+        # Disqualified announcement
+        self._disqualified_1 = font.render('You have been disqualified!', True, (0, 0, 0))
+        self._disqualified_2 = font.render('Waiting for the game to end...', True, (0, 0, 0))
 
         self.on_execute()
     
@@ -72,6 +78,7 @@ class Game:
     
     def on_submit_answer(self):
         self.reset_timer()
+        self._answer_input_field.value = ''
 
     def reset_timer(self):
         self._start_time = pygame.time.get_ticks()
@@ -86,7 +93,7 @@ class Game:
 
         # Display remaining time
         self._remaining_time = (self._timer_duration - elapsed_time) // 1000 if (self._timer_duration - elapsed_time) // 1000 >= 0 else 0
-        self._timer_text = medium_font.render('Time remaining: ' + str(self._remaining_time), True, (255, 0, 0))
+        self._timer = font.render('Time remaining: ' + str(self._remaining_time), True, (255, 0, 0))
 
     def on_event(self, event):
         if event.type == pygame.QUIT:
@@ -102,8 +109,8 @@ class Game:
                     if (self.is_nickname_valid(nickname)):
                         self._game_state = GameState.WAITING_FOR_START
                     else:
-                        self._nickname_input_label = medium_font.render('Nickname already taken. Please enter a different one: ', True, (255, 0, 0))
-                        self._nickname_input_field.value = ""
+                        self._nickname_input_label = font.render('Nickname already taken. Please enter a different one: ', True, (255, 0, 0))
+                        self._nickname_input_field.value = ''
                 elif (self._game_state == GameState.PLAYING):
                     self.on_submit_answer()
 
@@ -126,7 +133,7 @@ class Game:
 
             # TODO: Temporary code to simulate waiting for game server to start, remove later
             pygame.display.flip()
-            time.sleep(5)
+            time.sleep(3)
             self._game_state = GameState.PLAYING
             self.reset_timer()
 
@@ -135,9 +142,38 @@ class Game:
             points_rect.center = (self._display_info.current_w // 2, 30)
             self._screen.blit(self._points_text, points_rect)
 
-            timer_rect = self._timer_text.get_rect()
-            timer_rect.center = (self._display_info.current_w // 2, 60)
-            self._screen.blit(self._timer_text, timer_rect)
+            timer_rect = self._timer.get_rect()
+            timer_rect.center = (self._display_info.current_w // 2, 80)
+            self._screen.blit(self._timer, timer_rect)
+
+            keyword_rect = self._keyword.get_rect()
+            keyword_rect.center = (self._display_info.current_w // 2, self._display_info.current_h // 2 - 50)
+            self._screen.blit(self._keyword, keyword_rect)
+
+            hint_rect = self._hint.get_rect()
+            hint_rect.center = (self._display_info.current_w // 2, self._display_info.current_h // 2)
+            self._screen.blit(self._hint, hint_rect)
+
+            answer_label_rect = self._answer_input_label.get_rect()
+            answer_label_rect.center = (self._display_info.current_w // 2, self._display_info.current_h // 2 + 50)
+            self._screen.blit(self._answer_input_label, answer_label_rect)
+
+            input_field_rect = self._answer_input_field.surface.get_rect()
+            input_field_rect.center = (self._display_info.current_w // 2, self._display_info.current_h // 2 + 100)
+            self._screen.blit(self._answer_input_field.surface, input_field_rect)
+
+        if (self._game_state == GameState.PLAYING_DISQUALIFIED):
+            points_rect = self._points_text.get_rect()
+            points_rect.center = (self._display_info.current_w // 2, 30)
+            self._screen.blit(self._points_text, points_rect)
+
+            disqualified_1_rect = self._disqualified_1.get_rect()
+            disqualified_1_rect.center = (self._display_info.current_w // 2, self._display_info.current_h // 2 - 50)
+            self._screen.blit(self._disqualified_1, disqualified_1_rect)
+
+            disqualified_2_rect = self._disqualified_2.get_rect()
+            disqualified_2_rect.center = (self._display_info.current_w // 2, self._display_info.current_h // 2)
+            self._screen.blit(self._disqualified_2, disqualified_2_rect)
 
         pygame.display.flip()
  
@@ -154,7 +190,11 @@ class Game:
                 pass
             
             if (self._game_state == GameState.PLAYING): 
+                self._answer_input_field.update(events)
                 self.handle_timer()
+
+            if (self._game_state == GameState.PLAYING_DISQUALIFIED):
+                pass   
 
             self.on_render()
         self.on_cleanup()
