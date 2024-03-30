@@ -60,6 +60,10 @@ class Game:
         self._remaining_time = self._timer_duration // 1000
         self._timer_text = medium_font.render('Time remaining: ' + str(self._remaining_time), True, (255, 0, 0))
 
+        # Answer input
+        self._answer_input_label = medium_font.render('Enter your answer: ', True, (0, 0, 0))
+        self._answer_input_field = pygame_textinput.TextInputVisualizer()
+
         self.on_execute()
     
     # Check with the server if the nickname is already taken
@@ -78,7 +82,7 @@ class Game:
 
         # Check if timer has finished
         if elapsed_time >= self._timer_duration:
-            print("Timer finished!")
+            self.on_submit_answer()
 
         # Display remaining time
         self._remaining_time = (self._timer_duration - elapsed_time) // 1000 if (self._timer_duration - elapsed_time) // 1000 >= 0 else 0
@@ -120,6 +124,12 @@ class Game:
             waiting_rect.center = (self._display_info.current_w // 2, self._display_info.current_h // 2)
             self._screen.blit(self._waiting, waiting_rect)
 
+            # TODO: Temporary code to simulate waiting for game server to start, remove later
+            pygame.display.flip()
+            time.sleep(5)
+            self._game_state = GameState.PLAYING
+            self.reset_timer()
+
         if (self._game_state == GameState.PLAYING):
             points_rect = self._points_text.get_rect()
             points_rect.center = (self._display_info.current_w // 2, 30)
@@ -136,16 +146,15 @@ class Game:
             events = pygame.event.get()
             for event in events:
                 self.on_event(event)
-            self._nickname_input_field.update(events)
 
-            if (self._game_state == GameState.PLAYING): 
-                self.handle_timer()
+            if (self._game_state == GameState.REGISTERING):
+                self._nickname_input_field.update(events)
 
             if (self._game_state == GameState.WAITING_FOR_START):
-                # Simulate waiting for the game to start
-                time.sleep(5)
-                self._game_state = GameState.PLAYING
-                self.reset_timer()
+                pass
+            
+            if (self._game_state == GameState.PLAYING): 
+                self.handle_timer()
 
             self.on_render()
         self.on_cleanup()
