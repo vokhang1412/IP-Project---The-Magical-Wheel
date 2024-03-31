@@ -83,7 +83,11 @@ def start_game():
             continue
         # Send turn message to current player
         turn_message = "Player {}, it's your turn!\nTry to guess a character or the keyword (You can only guess the keyword from the 2nd turn): ".format(current_player.nickname)
-        current_player.conn.send(turn_message.encode())
+        for player in players:
+            if player == current_player:
+                player.conn.send(turn_message.encode())
+            else:
+                player.conn.send("Waiting for other player's turn...\n".encode())
 
         # Set a timeout for receiving guess
         current_player.conn.settimeout(60)  # 60 seconds timeout for guess
@@ -93,13 +97,13 @@ def start_game():
                 guess = current_player.conn.recv(1024).decode().strip()
             except socket.timeout:
                 current_player.conn.send("Timeout occurred. You missed your turn.\n".encode())
-                current_player.guess_count+=1
+                current_player.guess_count += 1
                 turns += 1
                 continue
         else:
             current_player.conn.send("Timeout occurred. You missed your turn.\n".encode())
             turns += 1
-            current_player.guess_count+=1
+            current_player.guess_count += 1
             continue
 
         if len(guess) > 1:

@@ -4,9 +4,10 @@ import threading
 connected = True
 game_ended = False
 game_end_event = threading.Event()
+player_turn_event = threading.Event()
 
 def receive_messages(client_socket):
-    global connected, game_ended, game_end_event
+    global connected, game_ended, game_end_event, player_turn_event
     while connected and not game_ended:
         try:
             message = client_socket.recv(1024).decode()
@@ -18,14 +19,19 @@ def receive_messages(client_socket):
                 print("Game ended. Press enter to exit...")
                 game_end_event.set()
                 break
+            elif "your turn" in message.lower():
+                player_turn_event.set()
+            elif "missed your turn" in message.lower():
+                player_turn_event.clear()
         except socket.timeout:
             print("You've missed your turn!")
             break
     connected = False
 
 def input_thread_func(client_socket):
-    global connected
-    while connected:
+    global connected, game_ended, player_turn_event
+    while connected and not game_ended:
+        player_turn_event.wait()  # Wait for player's turn
         if game_end_event.is_set():
             break
         message = input()
