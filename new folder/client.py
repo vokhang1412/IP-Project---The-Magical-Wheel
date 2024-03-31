@@ -34,8 +34,11 @@ def input_thread_func(client_socket):
         player_turn_event.wait()  # Wait for player's turn
         if game_end_event.is_set():
             break
-        message = input()
-        client_socket.send(message.encode())
+        try:
+            message = input()
+            client_socket.send(message.encode())
+        except EOFError:  # Raised when the input buffer is empty
+            pass
 
 def main():
     global connected, game_ended
