@@ -1,12 +1,18 @@
 import socket
 import threading
 import random
+import select
 
 class Player:
     def __init__(self, conn, addr, nickname):
         self.conn = conn
         self.addr = addr
         self.nickname = nickname
+        self.points = 0
+        self.guess_count = 0
+        self.active = True
+
+    def reset(self):
         self.points = 0
         self.guess_count = 0
         self.active = True
@@ -24,7 +30,7 @@ def read_database(filename):
     return keywords, descriptions
 
 def handle_client(player):
-    global players, keywords, game_running, descriptions
+    global players, keywords, game_running, descriptions, num_players
     welcome_message = "Welcome to The Magical Wheel, {}!\nEnter your nickname: ".format(player.nickname)
     player.conn.send(welcome_message.encode())
 
@@ -40,8 +46,7 @@ def handle_client(player):
 
     # Player registration completed
     print("Player {} registered".format(player.nickname))
-    order_message = "You are Player {} in the game\n".format(len(players))
-    player.conn.send(order_message.encode())
+    players.append(player)
 
     # Wait until all players have joined
     if len(players) == num_players:
@@ -52,6 +57,9 @@ def handle_client(player):
         game_running = True
         print("Starting game...")
         start_game()
+    else:
+        waiting_message = "Waiting for other players..."
+        player.conn.send(waiting_message.encode())
 
 def start_game():
     global players, keywords, game_running, descriptions
@@ -59,6 +67,7 @@ def start_game():
     keyword = keywords[keyword_idx]
     description = descriptions[keyword_idx]
     current_word = "*" * len(keyword)
+    guessed_characters = set()  # Set to store guessed characters
     # Send game start message to all players
     game_running = True
     game_start_message = "Game started!\nKeyword Length: {}\nDescription: {}\nCurrent Word: {}\n".format(len(keyword), description, current_word)
@@ -78,14 +87,21 @@ def start_game():
 
         # Set a timeout for receiving guess
         current_player.conn.settimeout(60)  # 60 seconds timeout for guess
-        try:
-            guess = current_player.conn.recv(1024).decode().strip()
-        except socket.timeout:
+        ready_to_read, _, _ = select.select([current_player.conn], [], [], 60)
+        if current_player.conn in ready_to_read:
+            try:
+                guess = current_player.conn.recv(1024).decode().strip()
+            except socket.timeout:
+                current_player.conn.send("Timeout occurred. You missed your turn.\n".encode())
+                current_player.guess_count+=1
+                turns += 1
+                continue
+        else:
             current_player.conn.send("Timeout occurred. You missed your turn.\n".encode())
             turns += 1
+            current_player.guess_count+=1
             continue
 
-        # Validate guess
         if len(guess) > 1:
             if len(guess) == len(keyword):
                 if current_player.guess_count > 0:
@@ -103,11 +119,17 @@ def start_game():
                         current_player.conn.send(wrong_guess_message.encode())
                 else:
                     current_player.conn.send("You can only guess the keyword from the 2nd turn.\n".encode()) 
+                    continue
             else:
                 current_player.conn.send("Invalid guess. Please try again.\n".encode())
+                continue
         else:
-            if guess.lower() in keyword.lower():
+            if guess.lower() in guessed_characters:
+                current_player.conn.send("This character has been guessed. Please guess again.\n".encode())
+                continue
+            elif guess.lower() in keyword.lower():
                 occurrences = keyword.lower().count(guess.lower())
+                guessed_characters.add(guess.lower())  # Add guessed character to the set
                 current_word = update_current_word(keyword, current_word, guess)
                 if "*" not in current_word:
                     game_running = False
@@ -123,6 +145,7 @@ def start_game():
                     for player in players:
                         player.conn.send(correct_guess_message.encode())
             else:
+                guessed_characters.add(guess.lower())  # Add guessed character to the set
                 wrong_guess_message = "Character '{}' is not in the keyword.\n".format(guess)
                 current_player.conn.send(wrong_guess_message.encode())
             current_player.guess_count += 1
@@ -131,6 +154,7 @@ def start_game():
     # Game ended
     if game_running:
         end_game()
+
 
 def update_current_word(keyword, current_word, guess):
     updated_word = ""
@@ -204,8 +228,6 @@ def main():
         if len(players) < num_players:
             nickname = "Player{}".format(len(players) + 1)
             player = Player(conn, addr, nickname)
-            players.append(player)
-
             thread = threading.Thread(target=handle_client, args=(player,))
             thread.start()
         else:

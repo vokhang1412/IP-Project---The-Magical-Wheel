@@ -18,8 +18,8 @@ def receive_messages(client_socket):
                 print("Game ended. Press enter to exit...")
                 game_end_event.set()
                 break
-        except Exception as e:
-            print("Error:", e)
+        except socket.timeout:
+            print("You've missed your turn!")
             break
     connected = False
 
