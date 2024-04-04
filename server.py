@@ -1,126 +1,241 @@
 import socket
 import threading
 import random
+import select
 
-# Constants
-SERVER_IP = '127.0.0.1'
-SERVER_PORT = 9999
-MAX_PLAYERS = 2
-DATABASE_FILE = "database.txt"
+class Player:
+    def __init__(self, conn, addr, nickname):
+        self.conn = conn
+        self.addr = addr
+        self.nickname = nickname
+        self.points = 0
+        self.guess_count = 0
+        self.active = True
 
-# Global variables
-players = []
-player_points = {}
-player_order = {}
-keyword = ""
-hint = ""
-correct_keyword = False
-turn_count = 0
-clients = []
+    def reset(self):
+        self.points = 0
+        self.guess_count = 0
+        self.active = True
 
-def generate_random_keyword():
-    global keyword, hint
-    with open(DATABASE_FILE, 'r') as file:
-        lines = file.readlines()
-        n = int(lines[0])
-        keyword_index = random.randint(1, n)
-        keyword = lines[keyword_index*2-1].strip().lower()
-        hint = lines[keyword_index*2].strip()
+def read_database(filename):
+    keywords = []
+    descriptions = []
+    with open(filename, 'r') as file:
+        n = int(file.readline())
+        for _ in range(n):
+            keyword = file.readline().strip()
+            description = file.readline().strip()
+            keywords.append(keyword)
+            descriptions.append(description)
+    return keywords, descriptions
 
-def client_handler(client_socket, player_address):
-    global players, player_order, player_points, keyword, hint, correct_keyword, turn_count
-    
-    nickname = client_socket.recv(1024).decode()
-    if nickname in players:
-        client_socket.send("Nickname already taken. Please choose another one.".encode())
-        client_socket.close()
-        return
-    players.append(nickname)
-    player_points[nickname] = 0
-    player_order[nickname] = len(players)
-    print(f"Player {nickname} has joined the game.")
-    client_socket.send(f"Registration Completed Successfully. Your order is: {player_order[nickname]}".encode())
+def handle_client(player):
+    global players, keywords, game_running, descriptions, num_players
+    welcome_message = "Welcome to The Magical Wheel, {}!\nEnter your nickname: ".format(player.nickname)
+    player.conn.send(welcome_message.encode())
 
-    while len(players) < MAX_PLAYERS:
-        pass  # Waiting for all players to join
-    
-    # Generate random keyword for all players
-    generate_random_keyword()
-    for client in clients:
-        client.send(f"The length of the keyword is {len(keyword)}: {'*' * len(keyword)}\nHints: {hint}".encode())
-
-    # Gameplay loop
-    while not correct_keyword and turn_count < 5:
-        guess = client_socket.recv(1024).decode()
-        if len(guess) == 1:	
-            if guess.lower() in keyword:
-                count = keyword.count(guess.lower())
-                new_keyword = ''.join([char if char == guess.lower() else '*' for char in keyword])
-                client_socket.send(f"Character '{guess}' has {count} occurrence.\nThe current keyword is \"{new_keyword}\"".encode())
-                if '*' not in new_keyword:
-                    correct_keyword = True
-                    player_points[nickname] += 5
-                    for client in clients:
-                        client.send(f"Congratulations to the winner with the correct keyword: \"{keyword}\"".encode())
-                else:
-                    player_points[nickname] += 1
-            else:
-                client_socket.send(f"Character '{guess}' is not in the keyword.".encode())
-                turn_count += 1
-            pass
+    nickname_taken = True
+    while nickname_taken:
+        nickname = player.conn.recv(1024).decode().strip()
+        if not any(p.nickname.lower() == nickname.lower() for p in players) and len(nickname) <= 10:
+            player.nickname = nickname
+            nickname_taken = False
+            player.conn.send("Registration Completed Successfully\n".encode())
         else:
-            # Check if it's the second turn or onwards to allow guessing the whole word
-            if turn_count >= 1:
-                # Check if the guessed word is correct
-                if guess.lower() == keyword:
-                    correct_keyword = True
-                    player_points[nickname] += 5
-                    for client in clients:
-                        client.send(f"Congratulations to the winner '{nickname}' with the correct keyword: \"{keyword}\"".encode())
-                    break;    #end the game upon correct keyword is guessed correctly
-                else:
-                    client_socket.send("Incorrect guess. Try again.".encode())
-                    turn_count += 1
+            player.conn.send("Nickname already taken or invalid length. Choose another one: ".encode())
+
+    # Player registration completed
+    print("Player {} registered".format(player.nickname))
+    players.append(player)
+
+    # Wait until all players have joined
+    if len(players) == num_players:
+        # Load game data
+        keywords, descriptions = read_database("database.txt")
+
+        # Start the game
+        game_running = True
+        print("Starting game...")
+        start_game()
+    else:
+        waiting_message = "Waiting for other players..."
+        player.conn.send(waiting_message.encode())
+
+def start_game():
+    global players, keywords, game_running, descriptions
+    keyword_idx = random.randint(0, len(keywords) - 1)
+    keyword = keywords[keyword_idx]
+    description = descriptions[keyword_idx]
+    current_word = "*" * len(keyword)
+    guessed_characters = set()  # Set to store guessed characters
+    # Send game start message to all players
+    game_running = True
+    game_start_message = "Game started!\n{}\n{}\n{}\n".format(len(keyword), description, current_word)
+    for player in players:
+        player.conn.send(game_start_message.encode())
+
+    # Game logic
+    turns = 0
+    while game_running and any(p.guess_count < max_turns and p.active for p in players):
+        current_player = players[turns % num_players]
+        if not current_player.active:
+            turns += 1
+            continue
+        # Send turn message to current player
+        turn_message = "Player {}, it's your turn!\nTry to guess a character or the keyword (You can only guess the keyword from the 2nd turn): ".format(current_player.nickname)
+        for player in players:
+            if player == current_player:
+                player.conn.send(turn_message.encode())
             else:
-                client_socket.send("You can only guess the whole word from the second turn onwards.".encode())
+                player.conn.send("Waiting for other player's turn...\n".encode())
 
-    if not correct_keyword:
-    # Inform players that the game is over
-        for client in clients:
-            client.send("Game over!".encode())
-            client.close()
-
-def start_game(client_socket):
-    global correct_keyword
-    try:
-        response = client_socket.recv(1024).decode()
-        if response == "start_game":
-            client_socket.send("game_started".encode())
-            print("Game started!")
-            return True
+        # Set a timeout for receiving guess
+        current_player.conn.settimeout(60)  # 60 seconds timeout for guess
+        ready_to_read, _, _ = select.select([current_player.conn], [], [], 60)
+        if current_player.conn in ready_to_read:
+            try:
+                guess = current_player.conn.recv(1024).decode().strip()
+            except socket.timeout:
+                current_player.conn.send("Timeout occurred. You missed your turn.\n".encode())
+                current_player.guess_count += 1
+                turns += 1
+                continue
         else:
-            print("Error: Failed to start the game.")
-            return False
-    except Exception as e:
-        print("Error:", e)
-        return False
+            current_player.conn.send("Timeout occurred. You missed your turn.\n".encode())
+            turns += 1
+            current_player.guess_count += 1
+            continue
+
+        if len(guess) > 1:
+            if len(guess) == len(keyword):
+                if current_player.guess_count > 0:
+                    if guess.lower() == keyword.lower():
+                        game_running = False
+                        current_player.points += 5
+                        end_game_message = "Congratulations to {} with the correct keyword: {}\n".format(current_player.nickname, keyword)
+                        for player in players:
+                            player.conn.send(end_game_message.encode())
+                        end_game()
+                        break
+                    else:
+                        current_player.active = False  # Player is no longer active
+                        wrong_guess_message = "Incorrect guess! You are out of the game.\n"
+                        current_player.conn.send(wrong_guess_message.encode())
+                else:
+                    current_player.conn.send("You can only guess the keyword from the 2nd turn.\n".encode()) 
+                    continue
+            else:
+                current_player.conn.send("Invalid guess. Please try again.\n".encode())
+                continue
+        else:
+            if guess.lower() in guessed_characters:
+                current_player.conn.send("This character has been guessed. Please guess again.\n".encode())
+                continue
+            elif guess.lower() in keyword.lower():
+                occurrences = keyword.lower().count(guess.lower())
+                guessed_characters.add(guess.lower())  # Add guessed character to the set
+                current_word = update_current_word(keyword, current_word, guess)
+                if "*" not in current_word:
+                    game_running = False
+                    current_player.points += 5
+                    end_game_message = "Congratulations to {} with the correct keyword: {}\n".format(current_player.nickname, keyword)
+                    for player in players:
+                        player.conn.send(end_game_message.encode())
+                    end_game()
+                    break
+                else:
+                    current_player.points += 1
+                    correct_guess_message = "Character '{}' has {} occurrence(s).\nCurrent Word: {}\n".format(guess, occurrences, current_word)
+                    for player in players:
+                        player.conn.send(correct_guess_message.encode())
+            else:
+                guessed_characters.add(guess.lower())  # Add guessed character to the set
+                wrong_guess_message = "Character '{}' is not in the keyword.\n".format(guess)
+                current_player.conn.send(wrong_guess_message.encode())
+            current_player.guess_count += 1
+            turns += 1
+
+    # Game ended
+    if game_running:
+        end_game()
+
+
+def update_current_word(keyword, current_word, guess):
+    updated_word = ""
+    for k, c in zip(keyword, current_word):
+        if k.lower() == guess.lower() or c != "*":
+            updated_word += k
+        else:
+            updated_word += "*"
+    return updated_word
+
+def end_game():
+    global players, game_running
+    game_running = False
+
+    # Calculate and announce points
+    points_message = "Game ended!\nPoints:\n"
+    points = [(p.nickname, p.points) for p in players]
+    points.sort(key=lambda x: x[1], reverse=True)
+    for i, (nickname, point) in enumerate(points):
+        points_message += "{}. {}: {}\n".format(i + 1, nickname, point)
+
+    # Announce points to all players
+    for player in players:
+        player.conn.send(points_message.encode())
+
+    # Prompt players to restart the game
+    restart_message = "Do you want to restart the game? (Y/N): "
+    for player in players:
+        player.conn.send(restart_message.encode())
+
+    # Check players' responses
+    responses = set()
+    for player in players:
+        response = player.conn.recv(1024).decode().strip().lower()
+        responses.add(response)
+
+    # If no player chooses to restart, start a new game
+    if 'n' not in responses:
+        for player in players:
+            player.reset()
+        start_game()
+    else:
+        # Notify players that the game is ending
+        disconnect_message = "Game is ending. Thank you for playing!"
+        for player in players:
+            player.conn.send(disconnect_message.encode())
+            player.conn.close()
+        players.clear()
 
 def main():
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.bind((SERVER_IP, SERVER_PORT))
-    server_socket.listen(MAX_PLAYERS)
+    global players, num_players, max_turns, game_running
+    host = "localhost"
+    port = 5555
 
-    print("Server is running...")
+    players = []
+    keywords = []
+    num_players = 2
+    max_turns = 5
+    game_running = False
 
-    while (len(clients) < MAX_PLAYERS):
-        client_socket, client_address = server_socket.accept()
-        clients.append(client_socket)
-        print(f"Connection from {client_address}")
-        threading.Thread(target=client_handler, args=(client_socket, client_address)).start()
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind((host, port))
+    server.listen()
 
-    for client in clients:
-        if not start_game(client):
-            client.close()
+    print("Server started on {}:{}".format(host, port))
+
+    while True:
+        conn, addr = server.accept()
+        print("Connected to {}:{}".format(addr[0], addr[1]))
+
+        if len(players) < num_players:
+            nickname = "Player{}".format(len(players) + 1)
+            player = Player(conn, addr, nickname)
+            thread = threading.Thread(target=handle_client, args=(player,))
+            thread.start()
+        else:
+            conn.send("The game is full. Please try again later.\n".encode())
 
 if __name__ == "__main__":
     main()
