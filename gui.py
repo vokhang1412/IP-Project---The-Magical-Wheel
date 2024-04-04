@@ -2,6 +2,8 @@ import pygame
 import pygame_textinput
 from enum import Enum 
 import time
+import socket
+import threading
 
 # GUI for the players
 # It contains: 
@@ -20,18 +22,41 @@ import time
 pygame.font.init()
 font = pygame.font.SysFont('roboto.ttf', 35)
 
+host = "localhost"
+port = 5555
+connected = True
+game_ended = False
+game_end_event = threading.Event()
+player_turn_event = threading.Event()
+player_disqualified_event = threading.Event()
+
 class GameState(Enum):
     REGISTERING = 0
-    WAITING_FOR_START = 1
-    PLAYING = 2
-    WAITING_FOR_SERVER_RESPONSE = 3
-    PLAYING_DISQUALIFIED = 4
+    WAITING_FOR_START = 2
+    PLAYING = 3
+    WAITING_FOR_SERVER_RESPONSE = 4
+
+class TurnState(Enum):
+    PLAYER_TURN = 0
+    WAITING = 1
+    DISQUALIFIED = 2
+
+class ANSWER(Enum):
+    CORRECT_CHARACTER = 0
+    INCORRECT_CHARACTER = 1
+    CORRECT_KEYWORD = 2
+    INCORRECT_KEYWORD = 3
+    INVALID = 4
  
 class Game:
     def __init__(self):
         self._running = True
         pygame.init()
-        pygame.time.set_timer(pygame.USEREVENT, 200)
+
+        # Connect to the server
+        self._client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._client_socket.connect((host, port))
+        self.buffer_responses()
 
         # Display configurations
         self._display_info = pygame.display.Info()
@@ -39,16 +64,24 @@ class Game:
 
         # Game configurations
         self._game_state = GameState.REGISTERING
+        self._turn_state = TurnState.WAITING
         
         self._start_time = pygame.time.get_ticks()
         self._timer_duration = 5000
 
+        self._keyword = ""
+        self._description = ""
+
+        # Utility flags
+        self._wait_flag = False
+        self._play_flag = False
+
         # Nickname input
-        self._nickname_input_label = font.render('Enter a nickname:', True, (0, 0, 0))
+        self._nickname_input_label = font.render('Enter a nickname: ', True, (0, 0, 0))
         self._nickname_input_field = pygame_textinput.TextInputVisualizer()
 
         # Waiting announcement
-        self._waiting = font.render('Waiting for game server to start...', True, (0, 0, 0))
+        self._announcement_text = font.render('Waiting for game server to start...', True, (0, 0, 0))
 
         # Points
         self._points = 0
@@ -61,22 +94,77 @@ class Game:
         self._timer = font.render('Time remaining: ' + str(self._remaining_time), True, (255, 0, 0))
 
         # Answer input
-        self._keyword = font.render('Keyword: ******', True, (0, 0, 255))
-        self._hint = font.render('Hint: This is a hint.', True, (0, 0, 255))
+        self.set_keyword_and_description('', '')
         self._answer_input_label = font.render('Enter your answer (a character or the whole keyword): ', True, (0, 0, 0))
         self._answer_input_field = pygame_textinput.TextInputVisualizer()
 
-        # Disqualified announcement
-        self._disqualified_1 = font.render('You have been disqualified!', True, (0, 0, 0))
-        self._disqualified_2 = font.render('Waiting for the game to end...', True, (0, 0, 0))
+        # Game announcement
+        self._annoucement = ''
+        self._announcement_text = font.render(self._annoucement, True, (0, 0, 0))
 
         self.on_execute()
     
+    # Helper to buffer the unnecessary responses from the server
+    def buffer_responses(self):
+        self._client_socket.recv(1024).decode()
+
     # Check with the server if the nickname is already taken
-    def is_nickname_valid(self, nickname):
+    def on_submit_nickname(self, nickname):
+        self._client_socket.send(nickname.encode())
+        response = self._client_socket.recv(1024).decode()
+        if response == "Nickname already taken. Please enter a different one: ":
+            return False
         return True
     
+    # Wait for the server to send the game start message
+    def wait_for_start(self):
+        response = self._client_socket.recv(1024).decode()
+        while ("Game started!" not in response):
+            response = self._client_socket.recv(1024).decode()
+
+        self._game_state = GameState.PLAYING
+        self.reset_timer()
+
+        # Parse the keyword and description
+        tmp = response.split('\n')
+        keyword = tmp[3]
+        description = tmp[2]
+        self.set_keyword_and_description(keyword, description)
+
+    def set_keyword_and_description(self, keyword, description):
+        self._keyword = keyword
+        self._description = description
+        self._keyword = font.render('Keyword: {}'.format(self._keyword), True, (0, 0, 255))
+        self._hint = font.render('Hint: {}'.format(self._description), True, (0, 0, 255))
+    
+    def handle_turn_events(self):
+        while True:
+            try:
+                message = self._client_socket.recv(1024).decode()
+                if not message:
+                    break
+                print(message)
+                if message == "Game is ending. Thank you for playing!":
+                    game_end_event.set()
+                    break
+                elif "your turn" in message.lower():
+                    player_turn_event.set()
+                elif "missed your turn" in message.lower():
+                    player_turn_event.clear()
+                elif "out of the game" in message.lower():
+                    player_disqualified_event.set()
+                elif "occurence" in message.lower():
+                    pass
+            except socket.timeout:
+                player_turn_event.clear()
+                break
+
+    def set_annoucement(self, announcement):
+        self._annoucement = announcement
+        self._announcement_text = font.render(self._annoucement, True, (0, 0, 0))
+
     def on_submit_answer(self):
+        self._client_socket.send(self._answer_input_field.value.encode())
         self.reset_timer()
         self._answer_input_field.value = ''
 
@@ -106,7 +194,7 @@ class Game:
             if event.key == pygame.K_RETURN:
                 if (self._game_state == GameState.REGISTERING):
                     nickname = self._nickname_input_field.value
-                    if (self.is_nickname_valid(nickname)):
+                    if (self.on_submit_nickname(nickname)):
                         self._game_state = GameState.WAITING_FOR_START
                     else:
                         self._nickname_input_label = font.render('Nickname already taken. Please enter a different one: ', True, (255, 0, 0))
@@ -127,24 +215,14 @@ class Game:
             self._screen.blit(self._nickname_input_field.surface, input_field_rect)
 
         if (self._game_state == GameState.WAITING_FOR_START):
-            waiting_rect = self._waiting.get_rect()
-            waiting_rect.center = (self._display_info.current_w // 2, self._display_info.current_h // 2)
-            self._screen.blit(self._waiting, waiting_rect)
-
-            # TODO: Temporary code to simulate waiting for game server to start, remove later
-            pygame.display.flip()
-            time.sleep(3)
-            self._game_state = GameState.PLAYING
-            self.reset_timer()
+            announce_rect = self._announcement_text.get_rect()
+            announce_rect.center = (self._display_info.current_w // 2, self._display_info.current_h // 2)
+            self._screen.blit(self._announcement_text, announce_rect)
 
         if (self._game_state == GameState.PLAYING):
             points_rect = self._points_text.get_rect()
             points_rect.center = (self._display_info.current_w // 2, 30)
             self._screen.blit(self._points_text, points_rect)
-
-            timer_rect = self._timer.get_rect()
-            timer_rect.center = (self._display_info.current_w // 2, 80)
-            self._screen.blit(self._timer, timer_rect)
 
             keyword_rect = self._keyword.get_rect()
             keyword_rect.center = (self._display_info.current_w // 2, self._display_info.current_h // 2 - 50)
@@ -154,31 +232,29 @@ class Game:
             hint_rect.center = (self._display_info.current_w // 2, self._display_info.current_h // 2)
             self._screen.blit(self._hint, hint_rect)
 
-            answer_label_rect = self._answer_input_label.get_rect()
-            answer_label_rect.center = (self._display_info.current_w // 2, self._display_info.current_h // 2 + 50)
-            self._screen.blit(self._answer_input_label, answer_label_rect)
+            if (self._turn_state == TurnState.PLAYER_TURN):
+                timer_rect = self._timer.get_rect()
+                timer_rect.center = (self._display_info.current_w // 2, 80)
+                self._screen.blit(self._timer, timer_rect)
 
-            input_field_rect = self._answer_input_field.surface.get_rect()
-            input_field_rect.center = (self._display_info.current_w // 2, self._display_info.current_h // 2 + 100)
-            self._screen.blit(self._answer_input_field.surface, input_field_rect)
+                answer_label_rect = self._answer_input_label.get_rect()
+                answer_label_rect.center = (self._display_info.current_w // 2, self._display_info.current_h // 2 + 50)
+                self._screen.blit(self._answer_input_label, answer_label_rect)
 
-        if (self._game_state == GameState.PLAYING_DISQUALIFIED):
-            points_rect = self._points_text.get_rect()
-            points_rect.center = (self._display_info.current_w // 2, 30)
-            self._screen.blit(self._points_text, points_rect)
-
-            disqualified_1_rect = self._disqualified_1.get_rect()
-            disqualified_1_rect.center = (self._display_info.current_w // 2, self._display_info.current_h // 2 - 50)
-            self._screen.blit(self._disqualified_1, disqualified_1_rect)
-
-            disqualified_2_rect = self._disqualified_2.get_rect()
-            disqualified_2_rect.center = (self._display_info.current_w // 2, self._display_info.current_h // 2)
-            self._screen.blit(self._disqualified_2, disqualified_2_rect)
+                input_field_rect = self._answer_input_field.surface.get_rect()
+                input_field_rect.center = (self._display_info.current_w // 2, self._display_info.current_h // 2 + 100)
+                self._screen.blit(self._answer_input_field.surface, input_field_rect)
+            else:
+                announce_rect = self._announcement_text.get_rect()
+                announce_rect.center = (self._display_info.current_w // 2, self._display_info.current_h // 2 + 50)
+                self._screen.blit(self._announcement_text, announce_rect)
 
         pygame.display.flip()
  
     def on_execute(self):
         while (self._running) :
+            self.on_render()
+
             events = pygame.event.get()
             for event in events:
                 self.on_event(event)
@@ -186,17 +262,34 @@ class Game:
             if (self._game_state == GameState.REGISTERING):
                 self._nickname_input_field.update(events)
 
-            if (self._game_state == GameState.WAITING_FOR_START):
-                pass
+            if (self._game_state == GameState.WAITING_FOR_START and not self._wait_flag):
+                # Start the handler thread only once
+                self._wait_flag = True
+                thread = threading.Thread(target=self.wait_for_start)
+                thread.start()
             
-            if (self._game_state == GameState.PLAYING): 
-                self._answer_input_field.update(events)
-                self.handle_timer()
+            if (self._game_state == GameState.PLAYING):
+                # Start the handler thread only once
+                if (not self._play_flag):
+                    self._play_flag = True
+                    thread = threading.Thread(target=self.handle_turn_events)
+                    thread.start()
 
-            if (self._game_state == GameState.PLAYING_DISQUALIFIED):
-                pass   
+                if (player_disqualified_event.is_set()):
+                    self._turn_state = TurnState.DISQUALIFIED
+                    self.set_annoucement('You are out of the game!')
+                else:
+                    if (player_turn_event.is_set()):
+                        self._turn_state = TurnState.PLAYER_TURN
+                        self._answer_input_field.update(events)
+                        self.handle_timer()
+                    else:
+                        self._turn_state = TurnState.WAITING
+                        self.set_annoucement('Waiting for other players\' turn...')
 
-            self.on_render()
+                if (game_end_event.is_set()):
+                    pass
+
         self.on_cleanup()
 
     def on_cleanup(self):
