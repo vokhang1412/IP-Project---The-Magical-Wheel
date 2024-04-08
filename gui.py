@@ -167,8 +167,7 @@ class Game:
                         else: 
                             self.set_annoucement(i + 1, lines[i])
                     self.set_annoucement(7, 'Press Y to join the next game or N to exit.', (0, 0, 255))
-                    break
-                elif message == "Game is ending. Thank you for playing!":
+                elif "Game is ending" in message:
                     game_exiting_event.set()
                     break
                 elif "it's your turn" in message:
@@ -392,8 +391,10 @@ class Game:
                     self.set_annoucement(1, 'Waiting for other players\' turn...')
 
             if (self._game_state == GameState.ENDING):
-                if (game_exiting_event.is_set()):
-                    self._game_state = GameState.EXITING
+                pass
+
+            if (game_exiting_event.is_set()):
+                self._game_state = GameState.EXITING
 
             if (self._game_state == GameState.EXITING):
                 self._running = False
