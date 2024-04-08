@@ -40,7 +40,7 @@ def handle_client(player):
         if not any(p.nickname.lower() == nickname.lower() for p in players) and len(nickname) <= 10:
             player.nickname = nickname
             nickname_taken = False
-            player.conn.send("Registration Completed Successfully\n".encode())
+            player.conn.send("Registration Completed Successfully".encode())
         else:
             player.conn.send("Nickname already taken or invalid length. Choose another one: ".encode())
 

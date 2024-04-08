@@ -50,7 +50,10 @@ class Game:
         # Connect to the server
         self._client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._client_socket.connect((host, port))
-        self.buffer_responses()
+        # self.buffer_responses()
+        
+        thread = threading.Thread(target=self.handle_message)
+        thread.start()
 
         # Display configurations
         self._display_info = pygame.display.Info()
@@ -67,8 +70,8 @@ class Game:
         self._description = ""
 
         # Utility flags
-        self._wait_flag = False
-        self._play_flag = False
+        # self._wait_flag = False
+        # self._play_flag = False
 
         # Nickname input
         self._nickname_input_label = font.render('Enter a nickname: ', True, (0, 0, 0))
@@ -108,20 +111,20 @@ class Game:
         self.on_execute()
     
     # Helper to buffer the unnecessary responses from the server
-    def buffer_responses(self):
-        self._client_socket.recv(1024).decode()
+    # def buffer_responses(self):
+    #     self._client_socket.recv(1024).decode()
 
     # Check with the server if the nickname is already taken
     def on_submit_nickname(self, nickname):
         self._client_socket.send(nickname.encode())
-        response = self._client_socket.recv(1024).decode()
-        if response == "Nickname already taken. Please enter a different one: ":
-            return False
-        return True
+    #     response = self._client_socket.recv(1024).decode()
+    #     if response == "Nickname already taken. Please enter a different one: ":
+    #         return False
+    #     return True
     
     def restart_game(self):
-        self._wait_flag = False
-        self._play_flag = False
+        # self._wait_flag = False
+        # self._play_flag = False
         game_exiting_event.clear()
         game_ending_event.clear()
         player_turn_event.clear()
@@ -129,35 +132,52 @@ class Game:
         self._game_state = GameState.WAITING_FOR_START
 
     # Wait for the server to send the game start message
-    def wait_for_start(self):
-        response = self._client_socket.recv(1024).decode()
-        while ("Game started!" not in response):
-            response = self._client_socket.recv(1024).decode()
+    # def wait_for_start(self):
+    #     response = self._client_socket.recv(1024).decode()
+    #     while ("Game started!" not in response):
+    #         response = self._client_socket.recv(1024).decode()
+    #     self._game_state = GameState.PLAYING
+    #     self.reset_timer()
 
-        self._game_state = GameState.PLAYING
-        self.reset_timer()
-
-        # Parse the keyword and description
-        tmp = response.split('\n')
-        keyword = tmp[3]
-        description = tmp[2]
-        self.set_keyword_and_description(keyword, description)
-        self.set_annoucement(2, '')
+    #     # Parse the keyword and description
+    #     tmp = response.split('\n')
+    #     keyword = tmp[3]
+    #     description = tmp[2]
+    #     self.set_keyword_and_description(keyword, description)
+    #     self.set_annoucement(2, '')
 
     def set_keyword_and_description(self, keyword, description):
         self._keyword = keyword
         self._description = description
         self._keyword = font.render('Keyword: {}'.format(self._keyword), True, (0, 0, 255))
         self._hint = font.render('Hint: {}'.format(self._description), True, (0, 0, 255))
+
+    def set_nickname_input_label(self, announcement):
+        self._nickname_input_label = font.render(announcement, True, (255, 0, 0))
     
-    def handle_turn_events(self):
+    def handle_message(self):
         while True:
             try:
                 message = self._client_socket.recv(1024).decode()
                 if not message:
                     break
                 print(message)
-                if "Game ended!" in message:
+                if message == "Nickname already taken or invalid length. Choose another one: ":
+                    self.set_nickname_input_label(message)
+                elif message == "Registration Completed Successfully":
+                    self.set_nickname_input_label('Enter a nickname: ')
+                    self._game_state = GameState.WAITING_FOR_START
+                elif "Game started!" in message:
+                    self._game_state = GameState.PLAYING
+                    self.reset_timer()
+
+                    # Parse the keyword and description
+                    tmp = message.split('\n')
+                    keyword = tmp[3]
+                    description = tmp[2]
+                    self.set_keyword_and_description(keyword, description)
+                    self.set_annoucement(2, '')
+                elif "Game ended!" in message:
                     game_ending_event.set()
                     lines = message.splitlines()
 
@@ -176,6 +196,8 @@ class Game:
                     player_turn_event.clear()
                 elif "You are out of the game." in message:
                     player_disqualified_event.set()
+                elif message == "You can only guess the keyword from the 2nd turn." or message == "Invalid guess. Please try again." or message == "This character has been guessed. Please guess again.":
+                    self.set_annoucement(2, message)
                 elif "occurrence" in message:
                     words = message.split()
                     keyword = words[len(words) - 1]
@@ -249,14 +271,17 @@ class Game:
                 self.restart_game()
             elif event.key == pygame.K_n and self._game_state == GameState.ENDING:
                 self._client_socket.send("n".encode())
+                game_exiting_event.set()
             elif event.key == pygame.K_RETURN:
                 if (self._game_state == GameState.REGISTERING):
-                    nickname = self._nickname_input_field.value
-                    if (self.on_submit_nickname(nickname)):
-                        self._game_state = GameState.WAITING_FOR_START
-                    else:
-                        self._nickname_input_label = font.render('Nickname already taken. Please enter a different one: ', True, (255, 0, 0))
-                        self._nickname_input_field.value = ''
+                    self.on_submit_nickname(self._nickname_input_field.value)
+                    # nickname = self._nickname_input_field.value
+                    # if (self.on_submit_nickname(nickname)):
+                    #     self._game_state = GameState.WAITING_FOR_START
+                    # else:
+                    #     self._nickname_input_label = font.render('Nickname already taken. Please enter a different one: ', True, (255, 0, 0))
+                    #     self._nickname_input_field.value = ''
+                    pass
                 elif (self._game_state == GameState.PLAYING):
                     self.on_submit_answer()
 
@@ -357,28 +382,30 @@ class Game:
             if (self._game_state == GameState.REGISTERING):
                 self._nickname_input_field.update(events)
 
-            if (self._game_state == GameState.WAITING_FOR_START and not self._wait_flag):
+            # if (self._game_state == GameState.WAITING_FOR_START and not self._wait_flag):
+            if (self._game_state == GameState.WAITING_FOR_START):
                 self.set_annoucement(1, 'Waiting for other players...')
                 self.set_annoucement(2, 'Game will exit automatically if not enough player joins.')
                 # Start the handler thread only once
-                self._wait_flag = True
-                thread = threading.Thread(target=self.wait_for_start)
-                thread.start()
+                # self._wait_flag = True
+                # thread = threading.Thread(target=self.wait_for_start)
+                # thread.start()
 
             
             if (self._game_state == GameState.PLAYING):
                 # Start the handler thread only once
-                if (not self._play_flag):
-                    self._play_flag = True
-                    thread = threading.Thread(target=self.handle_turn_events)
-                    thread.start()
+                # if (not self._play_flag):
+                #     print('reach self._play_flag')
+                #     self._play_flag = True
+                #     thread = threading.Thread(target=self.handle_message)
+                #     thread.start()
                 
                 if (game_ending_event.is_set()):
                     self._game_state = GameState.ENDING
 
                 elif (player_disqualified_event.is_set()):
                     self._turn_state = TurnState.DISQUALIFIED
-                    self.set_annoucement(1, 'You are out of the game!')
+                    self.set_annoucement(1, 'Incorrect guess! You are out of the game!')
 
                 elif (player_turn_event.is_set()):
                     self._turn_state = TurnState.PLAYER_TURN
